@@ -1,0 +1,7 @@
+{
+  "name": "Galactic Memory Odyssey",
+  "description": "A 3D Valentine Proposal platform where a user creates a journey of memories for their partner to experience, culminating in a cinematic proposal.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
