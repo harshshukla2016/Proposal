@@ -12,7 +12,7 @@
 
 *A stunning 3D world where memories come alive in a cyberpunk-inspired Neo-Love City*
 
-[✨ Live Demo](https://proposal-harshshukla2016s-projects.vercel.app) • [📖 Documentation](#features) • [🚀 Quick Start](#quick-start)
+[✨ Live Demo](https://proposal-gamma-nine.vercel.app/) • [📖 Documentation](#features) • [🚀 Quick Start](#quick-start)
 
 </div>
 
