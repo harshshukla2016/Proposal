@@ -1,5 +1,6 @@
 
 import React, { Suspense, useEffect, useRef, useCallback, useState } from 'react';
+import { MobileJoystick } from '../components/MobileJoystick';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { Html, Environment, Sky, PointerLockControls } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
@@ -40,57 +41,131 @@ const SceneMemoryFrame = ({ memory, onClose }: { memory: MemoryType, onClose: ()
     );
 };
 
-const CityControls = ({ onInteract, disabled, buildings = [] }) => {
+// Mobile Helper
+const isMobileDevice = () => {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+};
+
+const CityControls = ({ onInteract, disabled, buildings = [], mobileMoveRef }: {
+    onInteract: (m: any) => void,
+    disabled: boolean,
+    buildings: any[],
+    mobileMoveRef?: React.MutableRefObject<{ x: number, y: number }>
+}) => {
     const { camera, scene, gl } = useThree();
     const [keys, setKeys] = useState({ w: false, a: false, s: false, d: false });
     const raycaster = useRef(new THREE.Raycaster());
+    const isMobile = useRef(isMobileDevice());
+
+    // Mobile Look State
+    const touchLook = useRef({ x: 0, y: 0, active: false });
 
     useEffect(() => {
         if (disabled) {
             setKeys({ w: false, a: false, s: false, d: false });
-            document.exitPointerLock(); // Explicitly unlock cursor
+            if (!isMobile.current) document.exitPointerLock();
             return;
         }
 
-        const handleDown = (e) => {
+        // --- DESKTOP LISTENERS ---
+        const handleDown = (e: KeyboardEvent) => {
             const k = e.key.toLowerCase();
             if (['w', 'a', 's', 'd'].includes(k)) setKeys(p => ({ ...p, [k]: true }));
         };
-        const handleUp = (e) => {
+        const handleUp = (e: KeyboardEvent) => {
             const k = e.key.toLowerCase();
             if (['w', 'a', 's', 'd'].includes(k)) setKeys(p => ({ ...p, [k]: false }));
         };
-        const handleClick = () => {
-            if (disabled) return;
-            // Raycast from center
-            if (document.pointerLockElement) {
-                raycaster.current.setFromCamera(new THREE.Vector2(0, 0), camera);
-                const intersects = raycaster.current.intersectObjects(scene.children, true);
 
-                // Find first interactable memory object
-                for (let hit of intersects) {
-                    let obj = hit.object;
-                    while (obj) {
-                        if (obj.userData && obj.userData.isMemory) {
-                            onInteract(obj.userData.memory);
-                            return;
-                        }
-                        obj = obj.parent;
+        // --- SHARED CLICK/TAP LISTENERS ---
+        const handleClick = (e: MouseEvent | TouchEvent) => {
+            if (disabled) return;
+
+            // For Mobile: Only interact if tap is clearly NOT a drag
+            // (Simplified: Just raycast center)
+
+            raycaster.current.setFromCamera(new THREE.Vector2(0, 0), camera);
+            const intersects = raycaster.current.intersectObjects(scene.children, true);
+
+            for (let hit of intersects) {
+                let obj = hit.object;
+                while (obj) {
+                    if (obj.userData && obj.userData.isMemory) {
+                        onInteract(obj.userData.memory);
+                        return;
                     }
-                    if (hit.distance > 15) break;
+                    obj = obj.parent;
+                }
+                if (hit.distance > 15) break;
+            }
+        };
+
+        // --- MOBILE LOOK LISTENERS ---
+        const handleTouchStart = (e: TouchEvent) => {
+            // Only look with right side of screen
+            for (let i = 0; i < e.touches.length; i++) {
+                const touch = e.touches[i];
+                if (touch.clientX > window.innerWidth / 2) {
+                    touchLook.current.x = touch.clientX;
+                    touchLook.current.y = touch.clientY;
+                    touchLook.current.active = true;
                 }
             }
         };
 
-        window.addEventListener('keydown', handleDown);
-        window.addEventListener('keyup', handleUp);
-        window.addEventListener('mousedown', handleClick);
-        return () => {
-            window.removeEventListener('keydown', handleDown);
-            window.removeEventListener('keyup', handleUp);
-            window.removeEventListener('mousedown', handleClick);
+        const handleTouchMove = (e: TouchEvent) => {
+            if (!touchLook.current.active) return;
+            e.preventDefault(); // Prevent scroll
+
+            for (let i = 0; i < e.touches.length; i++) {
+                const touch = e.touches[i];
+                // If this touch started on right side (simplified check)
+                if (touch.clientX > window.innerWidth / 3) {
+                    const dx = touch.clientX - touchLook.current.x;
+                    const dy = touch.clientY - touchLook.current.y;
+
+                    // Rotate Camera
+                    const sensitivity = 0.005;
+                    camera.rotation.y -= dx * sensitivity;
+                    // camera.rotation.x -= dy * sensitivity; // Optional pitch
+
+                    touchLook.current.x = touch.clientX;
+                    touchLook.current.y = touch.clientY;
+                }
+            }
         };
-    }, [camera, scene, onInteract, disabled]);
+
+        const handleTouchEnd = () => {
+            touchLook.current.active = false;
+        };
+
+        if (isMobile.current) {
+            const dom = gl.domElement;
+            dom.addEventListener('touchstart', handleTouchStart, { passive: false });
+            dom.addEventListener('touchmove', handleTouchMove, { passive: false });
+            dom.addEventListener('touchend', handleTouchEnd);
+            // Add click for interaction via tap
+            dom.addEventListener('click', handleClick); // Might conflict, rely on UI button?
+        } else {
+            window.addEventListener('keydown', handleDown);
+            window.addEventListener('keyup', handleUp);
+            window.addEventListener('mousedown', handleClick);
+        }
+
+        return () => {
+            if (isMobile.current) {
+                const dom = gl.domElement;
+                dom.removeEventListener('touchstart', handleTouchStart);
+                dom.removeEventListener('touchmove', handleTouchMove);
+                dom.removeEventListener('touchend', handleTouchEnd);
+                dom.removeEventListener('click', handleClick);
+            } else {
+                window.removeEventListener('keydown', handleDown);
+                window.removeEventListener('keyup', handleUp);
+                window.removeEventListener('mousedown', handleClick);
+            }
+        };
+    }, [camera, scene, onInteract, disabled, gl]);
 
     useFrame((state, delta) => {
         if (disabled) return;
@@ -102,14 +177,24 @@ const CityControls = ({ onInteract, disabled, buildings = [] }) => {
         direction.normalize();
 
         const right = new THREE.Vector3();
-        // Standard First Person Controls: Right is Cross(Direction, Up)
         right.crossVectors(direction, camera.up).normalize();
 
         const moveVec = new THREE.Vector3();
+
+        // KEYBOARD INPUT
         if (keys.w) moveVec.add(direction);
         if (keys.s) moveVec.add(direction.clone().negate());
         if (keys.d) moveVec.add(right);
         if (keys.a) moveVec.add(right.clone().negate());
+
+        // MOBILE JOYSTICK INPUT
+        if (mobileMoveRef && mobileMoveRef.current) {
+            const { x, y } = mobileMoveRef.current; // x=right/left, y=up/down
+            if (y > 0) moveVec.add(direction.clone().multiplyScalar(y)); // Forward
+            if (y < 0) moveVec.add(direction.clone().multiplyScalar(Math.abs(y)).negate()); // Backward
+            if (x > 0) moveVec.add(right.clone().multiplyScalar(x)); // Right
+            if (x < 0) moveVec.add(right.clone().multiplyScalar(Math.abs(x)).negate()); // Left
+        }
 
         if (moveVec.lengthSq() > 0) {
             moveVec.normalize().multiplyScalar(speed);
@@ -117,18 +202,14 @@ const CityControls = ({ onInteract, disabled, buildings = [] }) => {
 
             // COLLISION DETECTION
             let collided = false;
-            const playerRadius = 1.5; // Avoid getting too close to walls
+            const playerRadius = 1.5;
 
             for (const b of buildings) {
-                // Building bounds
-                // position is center [x, y, z]
-                // args is [width, height, depth]
                 const bx = b.position[0];
                 const bz = b.position[2];
                 const halfWidth = b.args[0] / 2 + playerRadius;
                 const halfDepth = b.args[2] / 2 + playerRadius;
 
-                // Check AABB
                 if (
                     nextPos.x > bx - halfWidth &&
                     nextPos.x < bx + halfWidth &&
@@ -145,15 +226,13 @@ const CityControls = ({ onInteract, disabled, buildings = [] }) => {
             }
         }
 
-        // Height clamping
+        // Height & Bounds clamping
         camera.position.y = Math.max(2, Math.min(camera.position.y, 50));
-
-        // Bounds clamping (City Limits)
         camera.position.x = THREE.MathUtils.clamp(camera.position.x, -80, 80);
         camera.position.z = THREE.MathUtils.clamp(camera.position.z, -80, 80);
     });
 
-    return !disabled ? <PointerLockControls selector="#root" /> : null;
+    return (!disabled && !isMobile.current) ? <PointerLockControls selector="#root" /> : null;
 };
 
 import { CastleInterior } from './CastleInterior';
@@ -172,8 +251,11 @@ const MiniMap = ({
     palacePosition: [number, number, number],
     playerRotation?: number
 }) => {
-    // Map constants - GTA V style
-    const MAP_SIZE = 220; // Slightly larger for better visibility
+    // Detect mobile for responsive sizing
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    // Map constants - GTA V style (smaller on mobile)
+    const MAP_SIZE = isMobile ? 140 : 220; // Smaller on mobile
     const CITY_SIZE = 160; // World units
     const SCALE = MAP_SIZE / CITY_SIZE;
 
@@ -193,13 +275,13 @@ const MiniMap = ({
     return (
         <div style={{
             position: 'fixed', // Changed to fixed for true screen lock
-            top: '20px',
-            right: '20px',
+            top: isMobile ? '10px' : '20px',
+            right: isMobile ? '10px' : '20px',
             width: `${MAP_SIZE}px`,
             height: `${MAP_SIZE}px`,
             backgroundColor: 'rgba(5, 5, 15, 0.92)', // Darker, more opaque
-            border: '3px solid rgba(255, 255, 255, 0.3)',
-            borderRadius: '12px',
+            border: `${isMobile ? 2 : 3}px solid rgba(255, 255, 255, 0.3)`,
+            borderRadius: isMobile ? '8px' : '12px',
             overflow: 'hidden',
             zIndex: 99999, // Maximum z-index
             boxShadow: '0 0 30px rgba(0,0,0,0.8), inset 0 0 20px rgba(0,0,0,0.5)',
@@ -426,19 +508,25 @@ const MiniMap = ({
     );
 };
 
+
+
 // --- MAIN SCENE CONTENT ---
-const LoveCityContent = ({ setMapData }: {
+const LoveCityContent = ({ setMapData, mobileMoveRef, setIsInsideCastle, isMobile, isInsideCastle }: {
     setMapData: React.Dispatch<React.SetStateAction<{
         playerPosition: { x: number; z: number };
         playerRotation: number;
         memories: MemoryType[];
         palacePosition: [number, number, number];
-    }>>
+    }>>;
+    mobileMoveRef: React.MutableRefObject<{ x: number; y: number }>;
+    setIsInsideCastle: React.Dispatch<React.SetStateAction<boolean>>;
+    isMobile: React.MutableRefObject<boolean>;
+    isInsideCastle: boolean;
 }) => {
     const { proposalData, gamePhase, setGamePhase, collectedCrystalIds, addCollectedCrystal, setCurrentNarrative, currentNarrative } = useStore();
     const [activeMemory, setActiveMemory] = useState<MemoryType | null>(null);
     const [aimedMemoryId, setAimedMemoryId] = useState<string | null>(null);
-    const [isInsideCastle, setIsInsideCastle] = useState(false);
+    // isInsideCastle, isMobile, and mobileMoveRef now come from props
 
     // Player Position State for Minimap
     const [playerPos, setPlayerPos] = useState({ x: 0, z: 0 });
@@ -456,16 +544,6 @@ const LoveCityContent = ({ setMapData }: {
     useEffect(() => {
         if (proposalData) {
             console.log("🔥 Loaded Proposal Data:", proposalData);
-            if (proposalData.gallery_images && proposalData.gallery_images.length > 0) {
-                console.log("🖼️ Gallery Images Found:", proposalData.gallery_images);
-            } else {
-                console.warn("⚠️ No Gallery Images Found in proposalData");
-            }
-            if (proposalData.memories && proposalData.memories.length > 0) {
-                console.log("💎 Memories Found:", proposalData.memories);
-            } else {
-                console.warn("⚠️ No Memories Found in proposalData");
-            }
         }
     }, [proposalData]);
 
@@ -517,7 +595,9 @@ const LoveCityContent = ({ setMapData }: {
     // Initial Welcome
     useEffect(() => {
         if (proposalData && gamePhase === GamePhase.PLAYING && !currentNarrative) {
-            const welcome = `Welcome to the City of Eternal Love, ${proposalData.partner_name}. Use W, A, S, D to explore the avenues. Click anywhere to look around.`;
+            const welcome = isMobile.current
+                ? `Welcome, ${proposalData.partner_name}. Use the joystick to move and drag right side to look.`
+                : `Welcome, ${proposalData.partner_name}. Use W, A, S, D to explore. Click to look around.`;
             setCurrentNarrative(welcome);
         }
     }, [proposalData, gamePhase]);
@@ -548,7 +628,7 @@ const LoveCityContent = ({ setMapData }: {
 
     const handleEnterCastle = useCallback(() => {
         setIsInsideCastle(true);
-        document.exitPointerLock();
+        if (!isMobile.current) document.exitPointerLock();
 
         // Play Romantic Song
         if (proposalData?.music_url) {
@@ -587,28 +667,47 @@ const LoveCityContent = ({ setMapData }: {
             {/* UI Overlay - Consolidated */}
             <Html fullscreen style={{ pointerEvents: 'none', zIndex: 10 }}>
                 {/* Title & Info - Top Left */}
-                <div className="absolute top-4 left-4 p-4 bg-black/40 backdrop-blur-md rounded-xl border border-white/10 text-white shadow-xl pointer-events-auto">
-                    <h2 className="font-serif text-2xl text-pink-300 tracking-widest">NEO-LOVE CITY</h2>
-                    <p className="text-xs font-mono opacity-70">SECTOR: MEMORY CORE</p>
-                    <p className="text-xs mt-1 opacity-50">Phase: {gamePhase}</p>
-                </div>
+                {!isMobile.current && (
+                    <div className="absolute top-4 left-4 p-4 bg-black/40 backdrop-blur-md rounded-xl border border-white/10 text-white shadow-xl pointer-events-auto">
+                        <h2 className="font-serif text-2xl text-pink-300 tracking-widest">NEO-LOVE CITY</h2>
+                        <p className="text-xs font-mono opacity-70">SECTOR: MEMORY CORE</p>
+                        <p className="text-xs mt-1 opacity-50">Phase: {gamePhase}</p>
+                    </div>
+                )}
+
+                {/* Mobile Title - Smaller */}
+                {isMobile.current && (
+                    <div className="absolute top-2 left-2 p-2 bg-black/40 backdrop-blur-md rounded-lg border border-white/10 text-white shadow-xl pointer-events-auto origin-top-left scale-75">
+                        <h2 className="font-serif text-lg text-pink-300 tracking-widest">NEO-LOVE CITY</h2>
+                    </div>
+                )}
 
                 {/* Controls HUD - Bottom Right */}
-                <div className="absolute bottom-4 right-4 p-5 bg-black/60 backdrop-blur-md rounded-xl border border-white/10 text-white shadow-2xl pointer-events-none max-w-xs transition-opacity duration-1000">
-                    <h3 className="text-pink-300 font-bold mb-3 text-sm uppercase tracking-widest flex items-center gap-2">
-                        <span className="text-xl">💠</span> CONTROLS
-                    </h3>
-                    <ul className="text-xs md:text-sm space-y-2 text-gray-100 font-light font-mono">
-                        <li className="flex items-start gap-3">
-                            <span className="mt-1 w-2 h-2 bg-pink-400 rounded-full shadow-[0_0_8px_rgba(244,114,182,0.8)] animate-pulse"></span>
-                            <span><strong>CLICK</strong> :: ENGAGE VIEW</span>
-                        </li>
-                        <li className="flex items-start gap-3">
-                            <span className="mt-1 w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(34,211,238,0.8)] animate-pulse"></span>
-                            <span><strong>W S A D</strong> :: NAVIGATE</span>
-                        </li>
-                    </ul>
-                </div>
+                {!isMobile.current && (
+                    <div className="absolute bottom-4 right-4 p-5 bg-black/60 backdrop-blur-md rounded-xl border border-white/10 text-white shadow-2xl pointer-events-none max-w-xs transition-opacity duration-1000">
+                        <h3 className="text-pink-300 font-bold mb-3 text-sm uppercase tracking-widest flex items-center gap-2">
+                            <span className="text-xl">💠</span> CONTROLS
+                        </h3>
+                        <ul className="text-xs md:text-sm space-y-2 text-gray-100 font-light font-mono">
+                            <li className="flex items-start gap-3">
+                                <span className="mt-1 w-2 h-2 bg-pink-400 rounded-full shadow-[0_0_8px_rgba(244,114,182,0.8)] animate-pulse"></span>
+                                <span><b>W, A, S, D</b> / Arrows to Move</span>
+                            </li>
+                            <li className="flex items-start gap-3">
+                                <span className="mt-1 w-2 h-2 bg-purple-400 rounded-full shadow-[0_0_8px_rgba(168,85,247,0.8)]"></span>
+                                <span><b>Mouse</b> to Look Around</span>
+                            </li>
+                            <li className="flex items-start gap-3">
+                                <span className="mt-1 w-2 h-2 bg-blue-400 rounded-full shadow-[0_0_8px_rgba(96,165,250,0.8)]"></span>
+                                <span><b>Click</b> on Crystals to Collect</span>
+                            </li>
+                        </ul>
+                    </div>
+                )}
+
+                {/* Mobile Joystick - Now rendered outside Canvas */}
+
+
 
                 {/* Narrative Subtitles - Bottom Center */}
                 <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-full max-w-2xl text-center pointer-events-none">
@@ -618,9 +717,14 @@ const LoveCityContent = ({ setMapData }: {
                         </p>
                     </div>
                 </div>
-            </Html>
+            </Html >
 
-            <CityControls onInteract={handleLandmarkInteract} disabled={!!activeMemory || isInsideCastle} buildings={buildings} />
+            <CityControls
+                onInteract={handleLandmarkInteract}
+                disabled={!!activeMemory || isInsideCastle}
+                buildings={buildings}
+                mobileMoveRef={mobileMoveRef}
+            />
 
             {/* Lights & Atmosphere */}
             <color attach="background" args={['#87CEEB']} />
@@ -656,61 +760,67 @@ const LoveCityContent = ({ setMapData }: {
             </mesh>
 
             {/* Memory Landmarks - Fixed Locations (Shops/Cafes) */}
-            {(gamePhase === GamePhase.PLAYING || gamePhase === GamePhase.REVEAL || gamePhase === GamePhase.FINALE) && proposalData.memories.map((mem, i) => {
-                // Fixed positions for 5 memories along the road/city
-                const positions = [
-                    { pos: [15, 0, 30], label: "Star Cafe", color: "#ff69b4" },
-                    { pos: [-15, 0, 50], label: "Memory Shop", color: "#00bfff" },
-                    { pos: [20, 0, 70], label: "Love Bakery", color: "#ffd700" },
-                    { pos: [-20, 0, 20], label: "Dream Store", color: "#9370db" },
-                    { pos: [25, 0, 40], label: "Heart Boutique", color: "#ff1493" }
-                ];
+            {
+                (gamePhase === GamePhase.PLAYING || gamePhase === GamePhase.REVEAL || gamePhase === GamePhase.FINALE) && proposalData.memories.map((mem, i) => {
+                    // Fixed positions for 5 memories along the road/city
+                    const positions = [
+                        { pos: [15, 0, 30], label: "Star Cafe", color: "#ff69b4" },
+                        { pos: [-15, 0, 50], label: "Memory Shop", color: "#00bfff" },
+                        { pos: [20, 0, 70], label: "Love Bakery", color: "#ffd700" },
+                        { pos: [-20, 0, 20], label: "Dream Store", color: "#9370db" },
+                        { pos: [25, 0, 40], label: "Heart Boutique", color: "#ff1493" }
+                    ];
 
-                const loc = positions[i % positions.length];
-                const x = loc.pos[0];
-                const z = loc.pos[2];
+                    const loc = positions[i % positions.length];
+                    const x = loc.pos[0];
+                    const z = loc.pos[2];
 
-                return (
-                    <group key={mem.id} userData={{ isMemory: true, memory: mem }}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            handleLandmarkInteract(mem);
-                        }}
-                    >
-                        {/* The Shop Building interacting as the memory holder */}
-                        <ShopBuilding
-                            position={[x, 0, z]}
-                            label={loc.label}
-                            color={loc.color}
-                            onClick={() => handleLandmarkInteract(mem)}
-                        />
+                    return (
+                        <group key={mem.id} userData={{ isMemory: true, memory: mem }}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                handleLandmarkInteract(mem);
+                            }}
+                        >
+                            {/* The Shop Building interacting as the memory holder */}
+                            <ShopBuilding
+                                position={[x, 0, z]}
+                                label={loc.label}
+                                color={loc.color}
+                                onClick={() => handleLandmarkInteract(mem)}
+                            />
 
-                        {/* Floating Marker above shop */}
-                        <MemoryLandmark
-                            position={[x, 10, z]}
-                            isCollected={collectedCrystalIds.has(mem.id)}
-                            isActive={aimedMemoryId === mem.id}
-                            label={collectedCrystalIds.has(mem.id) ? "Visited" : "New Memory"}
-                            onClick={() => handleLandmarkInteract(mem)}
-                        />
-                    </group>
-                );
-            })}
+                            {/* Floating Marker above shop */}
+                            <MemoryLandmark
+                                position={[x, 10, z]}
+                                isCollected={collectedCrystalIds.has(mem.id)}
+                                isActive={aimedMemoryId === mem.id}
+                                label={collectedCrystalIds.has(mem.id) ? "Visited" : "New Memory"}
+                                onClick={() => handleLandmarkInteract(mem)}
+                            />
+                        </group>
+                    );
+                })
+            }
 
             {/* Active Memory 3D Frame */}
-            {activeMemory && (
-                <SceneMemoryFrame
-                    key={activeMemory.id}
-                    memory={activeMemory}
-                    onClose={() => setActiveMemory(null)}
-                />
-            )}
+            {
+                activeMemory && (
+                    <SceneMemoryFrame
+                        key={activeMemory.id}
+                        memory={activeMemory}
+                        onClose={() => setActiveMemory(null)}
+                    />
+                )
+            }
 
-            {gamePhase === GamePhase.PROPOSAL && (
-                <Html fullscreen style={{ pointerEvents: 'auto' }}>
-                    <ProposalUI onAccept={handleAcceptProposal} />
-                </Html>
-            )}
+            {
+                gamePhase === GamePhase.PROPOSAL && (
+                    <Html fullscreen style={{ pointerEvents: 'auto' }}>
+                        <ProposalUI onAccept={handleAcceptProposal} />
+                    </Html>
+                )
+            }
 
             <EffectComposer>
                 <Bloom luminanceThreshold={0.5} intensity={1.2} radius={0.4} mipmapBlur />
@@ -731,6 +841,11 @@ export default function LoveCityScene() {
         palacePosition: [0, 0, 0] as [number, number, number]
     });
 
+    // Mobile controls state - lifted to parent so joystick can be outside Canvas
+    const isMobile = useRef(isMobileDevice());
+    const mobileMoveRef = useRef({ x: 0, y: 0 });
+    const [isInsideCastle, setIsInsideCastle] = useState(false);
+
     return (
         <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
             {/* MiniMap - Outside Canvas for true fixed positioning */}
@@ -741,6 +856,16 @@ export default function LoveCityScene() {
                 playerRotation={mapData.playerRotation}
             />
 
+            {/* Mobile Joystick - Outside Canvas for true fixed positioning */}
+            {isMobile.current && !isInsideCastle && (
+                <>
+                    <MobileJoystick moveRef={mobileMoveRef} />
+                    <div className="fixed bottom-10 right-10 text-white/50 text-sm font-bold pointer-events-none z-50">
+                        DRAG HERE TO LOOK
+                    </div>
+                </>
+            )}
+
             {/* 3D Canvas */}
             <Canvas
                 shadows
@@ -749,7 +874,13 @@ export default function LoveCityScene() {
                 style={{ width: '100%', height: '100%' }}
             >
                 <Suspense fallback={<Html><LoadingScreen message="Rendering High-Fidelity Neural City..." /></Html>}>
-                    <LoveCityContent setMapData={setMapData} />
+                    <LoveCityContent
+                        setMapData={setMapData}
+                        mobileMoveRef={mobileMoveRef}
+                        setIsInsideCastle={setIsInsideCastle}
+                        isMobile={isMobile}
+                        isInsideCastle={isInsideCastle}
+                    />
                 </Suspense>
             </Canvas>
         </div>

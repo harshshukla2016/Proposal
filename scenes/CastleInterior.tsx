@@ -1,9 +1,15 @@
 
 import React, { useRef, useState, useMemo, useEffect } from 'react';
+import { MobileJoystick } from '../components/MobileJoystick';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Text, Float, Sparkles, PointerLockControls, Html, Image } from '@react-three/drei';
 import * as THREE from 'three';
 import { gsap } from 'gsap';
+
+// Mobile Helper
+const isMobileDevice = () => {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+};
 
 interface CastleInteriorProps {
     proposalText: string;
@@ -43,6 +49,11 @@ export const CastleInterior: React.FC<CastleInteriorProps> = ({ proposalText, mu
     const videoRef = useRef<HTMLVideoElement>(null);
     const bgMusicPlayerRef = useRef<HTMLIFrameElement>(null);
     const proposalVideoIframeRef = useRef<HTMLIFrameElement>(null);
+
+    // Mobile Controls State
+    const isMobile = useRef(isMobileDevice());
+    const mobileMoveRef = useRef({ x: 0, y: 0 });
+    const touchLook = useRef({ x: 0, y: 0, active: false });
 
     // Initial Setup: Check URLs
     useEffect(() => {
@@ -246,6 +257,55 @@ export const CastleInterior: React.FC<CastleInteriorProps> = ({ proposalText, mu
         };
     }, []);
 
+    // Mobile Touch Look Controls
+    useEffect(() => {
+        if (!isMobile.current) return;
+
+        const dom = document.body;
+
+        const handleTouchStart = (e: TouchEvent) => {
+            for (let i = 0; i < e.touches.length; i++) {
+                const touch = e.touches[i];
+                if (touch.clientX > window.innerWidth / 2) {
+                    touchLook.current.x = touch.clientX;
+                    touchLook.current.y = touch.clientY;
+                    touchLook.current.active = true;
+                }
+            }
+        };
+
+        const handleTouchMove = (e: TouchEvent) => {
+            if (!touchLook.current.active) return;
+            e.preventDefault();
+
+            for (let i = 0; i < e.touches.length; i++) {
+                const touch = e.touches[i];
+                if (touch.clientX > window.innerWidth / 3) {
+                    const dx = touch.clientX - touchLook.current.x;
+                    const sensitivity = 0.005;
+                    camera.rotation.y -= dx * sensitivity;
+
+                    touchLook.current.x = touch.clientX;
+                    touchLook.current.y = touch.clientY;
+                }
+            }
+        };
+
+        const handleTouchEnd = () => {
+            touchLook.current.active = false;
+        };
+
+        dom.addEventListener('touchstart', handleTouchStart, { passive: false });
+        dom.addEventListener('touchmove', handleTouchMove, { passive: false });
+        dom.addEventListener('touchend', handleTouchEnd);
+
+        return () => {
+            dom.removeEventListener('touchstart', handleTouchStart);
+            dom.removeEventListener('touchmove', handleTouchMove);
+            dom.removeEventListener('touchend', handleTouchEnd);
+        };
+    }, [camera]);
+
     useFrame((state, delta) => {
         // Movement
         const speed = 10 * delta;
@@ -262,6 +322,15 @@ export const CastleInterior: React.FC<CastleInteriorProps> = ({ proposalText, mu
         if (keys.s) moveVec.add(direction.clone().negate());
         if (keys.d) moveVec.add(right);
         if (keys.a) moveVec.add(right.clone().negate());
+
+        // MOBILE JOYSTICK
+        if (mobileMoveRef.current) {
+            const { x, y } = mobileMoveRef.current;
+            if (y > 0) moveVec.add(direction.clone().multiplyScalar(y));
+            if (y < 0) moveVec.add(direction.clone().multiplyScalar(Math.abs(y)).negate());
+            if (x > 0) moveVec.add(right.clone().multiplyScalar(x));
+            if (x < 0) moveVec.add(right.clone().multiplyScalar(Math.abs(x)).negate());
+        }
 
         if (moveVec.lengthSq() > 0) {
             moveVec.normalize().multiplyScalar(speed);
@@ -304,8 +373,20 @@ export const CastleInterior: React.FC<CastleInteriorProps> = ({ proposalText, mu
 
     return (
         <group>
-            {/* Pointer Lock Controls for mouse look */}
-            <PointerLockControls selector="#root" />
+            {/* Pointer Lock Controls for mouse look (Desktop Only) */}
+            {!isMobile.current && <PointerLockControls selector="#root" />}
+
+            {/* Mobile Joystick (Mobile Only) */}
+            {isMobile.current && (
+                <Html fullscreen style={{ pointerEvents: 'none', zIndex: 10 }}>
+                    <div className="pointer-events-auto">
+                        <MobileJoystick moveRef={mobileMoveRef} />
+                        <div className="absolute bottom-10 right-10 text-white/50 text-sm font-bold pointer-events-none">
+                            DRAG HERE TO LOOK
+                        </div>
+                    </div>
+                </Html>
+            )}
 
 
 
